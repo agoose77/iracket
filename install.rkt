@@ -53,9 +53,9 @@
   (command-line
    #:program "iracket/install.rkt"
    #:once-any
-   [("--ipython-dir") use-ipython-dir
-    "Write to given ipython configuration directory"
-    (*use-ipython-dir* use-ipython-dir)]
+   [("--jupyter-dir") use-jupyter-dir
+    "Write to given jupyter configuration directory (normally `jupyter --data-dir`)"
+    (*use-jupyter-dir* use-jupyter-dir)]
    #:args ()
    (write-iracket-kernel-json!)))
 
