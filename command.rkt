@@ -18,21 +18,26 @@
 (define-runtime-path iracket-dir ".")
 (define-runtime-path kernel-path "static/kernel.json")
 (define-runtime-path-list js-paths (list "static/custom.js" "static/c3.js"))
-(define *use-jupyter-dir* (make-parameter #f))
+
+(define *use-jupyter-exe* (make-parameter #f string->path))
 
 (define (get-jupyter-exe [fail-ok? #f])
-  (or (find-executable-path "jupyter")
+  (or (*use-jupyter-exe*)
+      (find-executable-path "jupyter")
       (if fail-ok? #f (raise-user-error "Cannot find jupyter executable."))))
 
 (define (get-jupyter-dir [fail-ok? #f])
-  (or (*use-jupyter-dir*)
-      (let ([jupyter (get-jupyter-exe fail-ok?)])
-        (cond [jupyter
-               (string-trim
-                (with-output-to-string
-                  (lambda () (system*/exit-code jupyter "--data-dir"))))]
-              [fail-ok? #f]
-              [else (raise-user-error "Cannot find jupyter data directory.")]))))
+  (let ([jupyter (get-jupyter-exe fail-ok?)])
+    (cond [jupyter
+           (string->path
+            (string-trim
+             (with-output-to-string
+               (lambda ()
+                 (define s (system*/exit-code jupyter "--data-dir"))
+                 (unless (zero? s)
+                   (raise-user-error "Received non-zero exit code from jupyter command."))))))]
+          [fail-ok? #f]
+          [else (raise-user-error "Cannot find jupyter data directory.")])))
 
 (define (get-racket-kernel-dir [fail-ok? #f])
   (define jupyter-dir (get-jupyter-dir fail-ok?))
@@ -42,6 +47,34 @@
 ;; Commands
 
 ;; ----------------------------------------
+;; Check status
+
+(define (cmd:check args)
+  (command-line
+   #:program (short-program+command-name)
+   #:argv args
+   #:once-any
+   [("--jupyter-exe") jupyter
+    "Use given jupyter executable"
+    (*use-jupyter-exe* jupyter)]
+   #:args ()
+   (check-iracket-kernel)))
+
+(define (check-iracket-kernel)
+  (with-handlers ([exn:fail:user?
+                   (lambda (e) (printf "~a\n" (exn-message e)))])
+    (define jupyter (get-jupyter-exe))
+    (printf "Jupyter executable: ~v\n" (path->string jupyter))
+    (define jupyter-dir (get-jupyter-dir))
+    (printf "Jupyter data directory: ~v\n" (path->string jupyter-dir))
+    (define kernel-dir (get-racket-kernel-dir))
+    (define kernel-path (build-path kernel-dir "kernel.json"))
+    (printf "Racket kernel path: ~v\n" (path->string kernel-path))
+    (printf "Racket kernel exists?: ~a\n" (if (file-exists? kernel-path) "yes" "no"))
+    (void))
+  (void))
+
+;; ----------------------------------------
 ;; Install kernel
 
 (define (cmd:install args)
@@ -49,16 +82,14 @@
    #:program (short-program+command-name)
    #:argv args
    #:once-any
-   [("--jupyter-dir") dir
-    "Write to given jupyter data directory" ;; (normally `jupyter --data-dir`)
-    (*use-jupyter-dir* dir)]
+   [("--jupyter-exe") jupyter
+    "Use given jupyter executable"
+    (*use-jupyter-exe* jupyter)]
    #:args ()
    (write-iracket-kernel-json!)))
 
 (define (write-iracket-kernel-json!)
-  (define racket-kernel-dir
-    (or (get-racket-kernel-dir)
-        (raise-user-error "Cannot find jupyter data directory; try --jupyter-dir")))
+  (define racket-kernel-dir (get-racket-kernel-dir))
   (make-directory* racket-kernel-dir)
   (define kernel-json
     (regexp-replace* (regexp-quote "IRACKET_SRC_DIR")
@@ -90,6 +121,7 @@
 
 (define subcommand-handlers
   `(("help"    ,cmd:help     "show help")
+    ("check"   ,cmd:check    "check IRacket configuration")
     ("install" ,cmd:install  "register IRacket kernel with Jupyter")))
 
 (define (call-subcommand handler name args)
@@ -111,9 +143,11 @@
 (provide installer)
 
 (define (installer _parent _here _user? _inst?)
-  (define kernel-dir (get-racket-kernel-dir))
+  (define kernel-dir (get-racket-kernel-dir #t))
   (define kernel-path (and kernel-dir (build-path kernel-dir "kernel.json")))
-  (cond [(and kernel-path (file-exists? kernel-path))
+  (cond [(not kernel-path)
+         (void)]
+        [(and kernel-path (file-exists? kernel-path))
          (when #f
            (printf "IRacket kernel found in ~a.\n" (path->string kernel-dir)))]
         [else
